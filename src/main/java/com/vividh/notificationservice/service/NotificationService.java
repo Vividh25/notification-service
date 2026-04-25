@@ -2,6 +2,8 @@ package com.vividh.notificationservice.service;
 
 import com.vividh.notificationservice.channel.NotificationChannel;
 import com.vividh.notificationservice.exception.UserNotFoundException;
+import com.vividh.notificationservice.kafka.NotificationProducer;
+import com.vividh.notificationservice.model.NotificationEvent;
 import com.vividh.notificationservice.model.NotificationLog;
 import com.vividh.notificationservice.model.NotificationRequest;
 import com.vividh.notificationservice.model.User;
@@ -24,8 +26,9 @@ public class NotificationService {
     private final UserRepository userRepository;
     private final NotificationLogRepository notificationLogRepository;
     private final Map<String, NotificationChannel> channelMap;
+    private final NotificationProducer producer;
 
-    public NotificationService(UserRepository userRepository, NotificationLogRepository notificationLogRepository , List<NotificationChannel> channels) {
+    public NotificationService(UserRepository userRepository, NotificationLogRepository notificationLogRepository , List<NotificationChannel> channels, NotificationProducer producer) {
         this.userRepository = userRepository;
         this.notificationLogRepository = notificationLogRepository;
         this.channelMap = channels.stream()
@@ -33,6 +36,7 @@ public class NotificationService {
                         NotificationChannel::getChannelType,
                         Function.identity()
                 ));
+        this.producer = producer;
     }
 
     public User registerUser(User user) {
@@ -40,8 +44,6 @@ public class NotificationService {
     }
 
     public String sendNotification(NotificationRequest request) {
-        System.out.println("Channel map keys: " + channelMap.keySet());
-        System.out.println("Requested channel: '" + request.getChannelType() + "'");
 
         User user = userRepository.findById(request.getUserId()).orElseThrow(() -> new UserNotFoundException(request.getUserId()));
 
@@ -57,23 +59,15 @@ public class NotificationService {
             channelsToUse = user.getChannelTypes();
         }
         for (String channelType : channelsToUse) {
-            NotificationChannel channel = channelMap.get(channelType);
-            if (channel != null) {
-                channel.send(user.getContact(), request.getMessage());
-                saveLog(user, channelType, request.getMessage());
-            }
+            NotificationEvent event = new NotificationEvent(
+                    user.getId(),
+                    user.getContact(),
+                    request.getMessage(),
+                    channelType
+            );
+            producer.sendNotificationEvent(event);
         }
-        return "Notification sent successfully!";
-    }
-
-    public void saveLog(User user, String channelType, String message) {
-        NotificationLog log = new NotificationLog();
-        log.setUserId(user.getId());
-        log.setContact(user.getContact());
-        log.setChannelType(channelType);
-        log.setMessage(message);
-        log.setSentAt(LocalDateTime.now());
-        notificationLogRepository.save(log);
+        return "Notification event published successfully!";
     }
 
     public List<NotificationLog> getLogsByUser(Long userId) {
